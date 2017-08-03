@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"bytes"
 )
 
 type ErrorDescr struct {
@@ -19,15 +20,11 @@ type Parser struct {
 	Errors map[string]*ErrorDescr
 }
 
-// type ErrorsInterface interface {
-// 	Errors()
-// 	allErrorsNumber()
-// }
-
 var (
 	sensitivity = 50
-	errTextRE   = regexp.MustCompile(fmt.Sprintf(`(-\s.{10,%v})`, sensitivity))
+	errTextRE   = regexp.MustCompile(fmt.Sprintf(`(\[ERROR\]|\[FATAL\]).{10,%v}`, sensitivity))
 	ErrorsRE    = regexp.MustCompile(`.*(\[ERROR\]|\[FATAL\]).+((\n.+){0,2})`)
+	Date_regExp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}`)
 )
 
 func NewParser(mode bool) *Parser {
@@ -42,17 +39,40 @@ func (e *Parser) include(name string) bool {
 }
 
 func (p *Parser) ParseLog(logFile io.Reader) {
+	var lastErr bytes.Buffer
+	var lastErrText bytes.Buffer
+
 	scanner := bufio.NewScanner(logFile)
 	for scanner.Scan() {
 		ln := scanner.Text()
+		errName := errTextRE.FindString(ln)
+		lastErrName := lastErr.String()
 		if ErrorsRE.MatchString(ln) {
-			str := errTextRE.FindString(ln)
-			if p.include(str) {
-				p.Errors[str].Number++
-			} else {
-				p.Errors[str] = &ErrorDescr{str, 1, str, true}
+			if p.include(lastErrName) && !p.Errors[lastErrName].completeValue {
+				p.Errors[lastErrName].FullErr = lastErrText.String()
+				p.Errors[lastErrName].completeValue = true
 			}
-			// fmt.Println(ErrorDescr{str, 1, str, false})
+			if p.include(errName) {
+				p.Errors[errName].Number++
+			} else {
+				p.Errors[errName] = &ErrorDescr{errName, 1, "", false}
+				lastErrText.Reset()
+				lastErrText.WriteString(ln)
+				lastErrText.WriteString("\n")
+			}
+			lastErr.Reset()
+			lastErr.WriteString(errName)
+			// fmt.Println("=========================", lastErr.String())
+		} else {
+			if p.include(lastErrName) {
+				if !p.Errors[lastErrName].completeValue && !Date_regExp.MatchString(ln) {
+					lastErrText.WriteString(ln)
+					lastErrText.WriteString("\n")
+				} else if Date_regExp.MatchString(ln) {
+					p.Errors[lastErrName].FullErr = lastErrText.String()
+					p.Errors[lastErrName].completeValue = true
+				}
+			}
 		}
 	}
 	return
