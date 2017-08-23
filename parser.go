@@ -2,10 +2,11 @@ package log_parser
 
 import (
 	"bufio"
-	"fmt"
-	"io"
-	"regexp"
 	"bytes"
+	"fmt"
+	"log"
+	"os"
+	"regexp"
 )
 
 type ErrorDescr struct {
@@ -16,8 +17,9 @@ type ErrorDescr struct {
 }
 
 type Parser struct {
-	debug  bool
-	Errors map[string]*ErrorDescr
+	debug   bool
+	LogFile string
+	Errors  map[string]*ErrorDescr
 }
 
 var (
@@ -27,8 +29,8 @@ var (
 	Date_regExp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}`)
 )
 
-func NewParser(mode bool) *Parser {
-	return &Parser{mode, make(map[string]*ErrorDescr)}
+func NewParser(mode bool, path string) *Parser {
+	return &Parser{mode, path, make(map[string]*ErrorDescr)}
 }
 
 func (e *Parser) include(name string) bool {
@@ -38,42 +40,55 @@ func (e *Parser) include(name string) bool {
 	return false
 }
 
-func (p *Parser) ParseLog(logFile io.Reader) {
-	var lastErr bytes.Buffer
-	var lastErrText bytes.Buffer
+func (p *Parser) logToConsole() {
+	for k, _ := range p.Errors {
+		e := p.Errors[k]
+		fmt.Printf("%v errors:\n\n%v\n\n\n%v\n\n\n", e.Number, e.Name, e.FullErr)
+	}
+}
 
-	scanner := bufio.NewScanner(logFile)
-	for scanner.Scan() {
-		ln := scanner.Text()
-		errName := errTextRE.FindString(ln)
-		lastErrName := lastErr.String()
-		if ErrorsRE.MatchString(ln) {
-			if p.include(lastErrName) && !p.Errors[lastErrName].completeValue {
-				p.Errors[lastErrName].FullErr = lastErrText.String()
-				p.Errors[lastErrName].completeValue = true
-			}
-			if p.include(errName) {
-				p.Errors[errName].Number++
-			} else {
-				p.Errors[errName] = &ErrorDescr{errName, 1, "", false}
-				lastErrText.Reset()
-				lastErrText.WriteString(ln)
-				lastErrText.WriteString("\n")
-			}
-			lastErr.Reset()
-			lastErr.WriteString(errName)
-			// fmt.Println("=========================", lastErr.String())
-		} else {
-			if p.include(lastErrName) {
-				if !p.Errors[lastErrName].completeValue && !Date_regExp.MatchString(ln) {
-					lastErrText.WriteString(ln)
-					lastErrText.WriteString("\n")
-				} else if Date_regExp.MatchString(ln) {
+func (p *Parser) ParseLog() {
+	if file, err := os.Open(p.LogFile); err == nil {
+		defer file.Close()
+
+		var lastErr bytes.Buffer
+		var lastErrText bytes.Buffer
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			ln := scanner.Text()
+			errName := errTextRE.FindString(ln)
+			lastErrName := lastErr.String()
+			if ErrorsRE.MatchString(ln) {
+				if p.include(lastErrName) && !p.Errors[lastErrName].completeValue {
 					p.Errors[lastErrName].FullErr = lastErrText.String()
 					p.Errors[lastErrName].completeValue = true
 				}
+				if p.include(errName) {
+					p.Errors[errName].Number++
+				} else {
+					p.Errors[errName] = &ErrorDescr{errName, 1, "", false}
+					lastErrText.Reset()
+					lastErrText.WriteString(ln)
+					lastErrText.WriteString("\n")
+				}
+				lastErr.Reset()
+				lastErr.WriteString(errName)
+				// fmt.Println("=========================", lastErr.String())
+			} else {
+				if p.include(lastErrName) {
+					if !p.Errors[lastErrName].completeValue && !Date_regExp.MatchString(ln) {
+						lastErrText.WriteString(ln)
+						lastErrText.WriteString("\n")
+					} else if Date_regExp.MatchString(ln) {
+						p.Errors[lastErrName].FullErr = lastErrText.String()
+						p.Errors[lastErrName].completeValue = true
+					}
+				}
 			}
 		}
+	} else {
+		log.Fatal(err)
 	}
 	return
 }
